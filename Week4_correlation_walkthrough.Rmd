@@ -1,0 +1,141 @@
+---
+title: "Week 4 Guide to t-testing and correlation"
+author: "Sidharth Jain"
+date: "6/28/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+This guide is meant to explain when we use correlations, and how this can be done practically in R.
+
+## Correlation
+When presented with two numeric variables, we may want to compare not just the differences between the mean, but the similarities in the patterns of data. We can use correlation to describe how similar two numeric variables are to each other. 
+
+> Correlation reflects the amount of "scatter" in a scatter plot of two variables. Unlike linear correlation, it does NOT fit a line to the data.
+
+Correlation coefficients are calculated from two numeric variables, and range from -1 to 1, where -1 indicates a strong negative correlation and 1 indicates a strong positive correlation. A correlation of 0 indicates no association between both variables.
+
+How do we calculate correlation? Mathematically, it's based on calculating distance of each point to the average of both variables, and normalizing by the square root of the sum of squares of each variable. The full formula is as follows:
+
+$$ r_{xy} = \frac{\sum(x_i - \bar{x})(y_i - \bar{y})}{\sqrt{\sum(x_i - \bar{x})^2\sum(y_i - \bar{y})^2}} $$
+
+But another way of writing this is as follows:
+
+$$ r_{xy} = \frac{SS(xy)}{\sqrt{SS(x) SS(y)}} $$
+
+We can view correlation as a variation of how we measure distance. If you're interested in the mathematical relationship between correlation and distance, see this link: [Correlation and Euclidean Distance](https://cmci.colorado.edu/classes/INFO-1301/files/borgatti.htm).
+
+In R, we calculate correlation using the `cor` function. See below for a demonstration using the iris dataset.
+
+```{r}
+cor(iris$Sepal.Length, iris$Sepal.Width)
+
+cor(iris$Petal.Length, iris$Sepal.Length, use = 'pairwise.complete') # Set use to 'pairwise.complete' when the data has NA values.
+```
+
+We can also use correlation to test a hypothesis. In this case, the null hypothesis is that the true population correlation is actually 0. We test this hypothesis using the sample correlation. In R, this is done using the `cor.test` function.
+
+```{r}
+cor.test(x = iris$Petal.Length, y = iris$Sepal.Length)
+```
+
+Note that the title of this output states that we are using the Pearson product-moment correlation. There is a specific t-statistic and df that is produced, and that is because the correlation test uses the t-distribution as it's null hypothesis. I won't go into those details here, but you can find more information at [this link](https://people.richland.edu/james/lecture/m170/ch11-cor.html).
+
+So what does it mean when we get a strong correlation? Let's take a look at data that is strongly correlated.
+
+```{r}
+ggplot(data = faithful, aes(x = eruptions, y = waiting))+
+  geom_point()
+
+cor(faithful$eruptions, faithful$waiting)
+
+```
+
+This is a strong correlation (r=0.9), suggesting a strong relationship between . We can also test whether this correlation is statistically significantly different from a correlation of 0 from this data.
+
+```{r}
+cor.test(faithful$eruptions, faithful$waiting)
+```
+
+But what happens when I take a specific subset of this data? Does the correlation continue to hold up?
+
+```{r}
+faithful_filt <- faithful %>%
+  filter(eruptions < 3)
+
+ggplot(data = faithful_filt, aes(x = eruptions, y = waiting))+
+  geom_point()
+
+cor.test(faithful_filt$eruptions, faithful_filt$waiting)
+```
+
+The p-value is still significant at a cut-off of 0.05, but the correlation value is far lower (r = 0.29). That's because there is significantly more scatter in this data.
+
+But as we mentioned last week, simple correlation might not always be the best measure of how nicely shaped a dataset is. A good example of this is from [Anscombe's quartet](https://en.wikipedia.org/wiki/Anscombe%27s_quartet), which shows 4 different patterns of data with identical correlation coefficients. We can show these with the `anscombe` data in R.
+
+```{r}
+anscombe_tidy <- anscombe %>%
+    mutate(observation = seq_len(n())) %>%
+    gather(key, value, -observation) %>%
+    separate(key, c("variable", "set"), 1, convert = TRUE) %>%
+    spread(variable, value)
+
+ggplot(data = anscombe_tidy, aes(x = x, y = y)) +
+  geom_point() +
+  facet_wrap(~set) +
+  ggtitle(label = "Anscombe data (r = 0.816)")
+```
+
+So how can we account for this? Well, correlations make a few key assumptions that are being violated in the Anscombe data:
+
+- The data on both the x and y axis should come from a population that is normally distributed
+- The x and y data are linearly related to each other.
+- There are no outliers in the data either on the x or the y
+
+One way to address the violation of these assumptions is to try a non-parametric approach. Non-parametric simply means not relying on a specific distribution (in this case, a normal distribution) to allow for valid statistical analysis.
+
+There are several non-parametric correlation approaches, but the one we'll focus on here is Spearman rank correlation. This replaces the numeric values with ranks and performs correlation on the ranks. For the Anscombe data, here are the Spearman rank correlations:
+
+```{r}
+cor(x = anscombe$x1, y = anscombe$y1, method = "spearman")
+
+cor(x = anscombe$x2, y = anscombe$y2, method = "spearman")
+
+cor(x = anscombe$x3, y = anscombe$y3, method = "spearman")
+
+cor(x = anscombe$x4, y = anscombe$y4, method = "spearman")
+```
+From this, we see that these correlation coefficients are now different from one another. Spearman correlations are appropriate to use when we're not sure about assumptions of Pearson linear correlation, but it should be noted that it's also more computationally intensive.
+
+That covers the extent that we'll use correlations. Note that there is MUCH more statistical theory that goes into correlation analysis, but we won't cover that here. For more, check Introduction to Statistical Learning.
+
+# Questions
+Q1. In the `mtcars` data, what is the relationship between number of cylinders (`cyl`) and miles per gallon (`mpg`)? What does this say about cars with higher cylinder engines?
+
+```{r}
+plot(mtcars$mpg, mtcars$cyl)
+```
+
+Q2. Look at cars with 6 or 8 cylinders. What is the correlation between miles per gallon and horsepower (`hp`)? What does this say about cars with higher miles per gallon?
+
+```{r}
+mtcars_filt <- mtcars %>%
+  filter(cyl >= 6)
+
+plot(mtcars_filt$mpg, mtcars_filt$hp)
+```
+
+Q3. Determine the relationship between cylinders and horsepower. What does this say about cars with higher cylinders?
+```{r}
+plot(mtcars$cyl, mtcars$hp)
+```
+
+Q4. Bonus: Can you create a visualization that shows the relationship between mpg, hp, and cyl?
+
+```{r}
+
+```
