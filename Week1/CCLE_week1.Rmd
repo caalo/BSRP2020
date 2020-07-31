@@ -1,0 +1,269 @@
+---
+title: "Week 1 - CCLE Annotations"
+author: '*Your name here*'
+date: "June 12th, 2020"
+output:
+  pdf_document: default
+  html_document: default
+theme: readable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen = 999)
+```
+
+## Introduction
+
+The **Cancer Cell Line Encyclopedia** is a ***massive*** collection of data that covers more than 1400 cancer cell lines (and still growing!). It contains various types of data, of which only some are listed below:
+
+- RNAseq (gene expression profile)
+- RPPA (reverse-phase protein arrays - protein production profile)
+- Fusion/translocation events (chromosomal/gene level rearrangements)
+- miRNA (micro-RNA expression)
+- Mutations (germline - present in all cells, heritable; somatic - not heritable)
+- Copy number (chromosome/gene level amplifications and deletions)
+- RRBS (reduced-representation bisulfite sequencing - methylation profiles)
+
+The human genome has somewhere between 17,000-30,000 genes (depending on who you ask), so some of these datasets can have around 1,400 x 17,000 different points of data!
+
+How many points of data is that exactly? Let's calculate it! Remember that we can treat R like a calculator:
+
+```{r, echo = T, eval = T}
+number_of_celllines <- 1400 # assign the value 1400 to the variable "number_of_celllines"
+number_of_genes <- 17000 # do the same thing for 17000 to "number_of_genes"
+
+number_of_datapoints <- number_of_genes * number_of_celllines # create a new variable called number_of_datapoints that is the product of the number_of_genes and the number_of_celllines
+number_of_datapoints # show our result!
+```
+
+So a single chunk of data can have approximately `r number_of_datapoints` different values.
+
+That's a LOT of data! But before we even begin to dive into the actual data itself, we need to learn information about the data.
+
+### Getting data about the data
+
+To start off, we're going to take a look at information about the cell lines in CCLE. Each of the cell lines listed here are used in the wet lab. For example, you may have heard the story of HeLa cells, which were obtained from a woman named Henrietta Lacks. If you have some free time, then I highly recommend reading [The Immortal Life of Henrietta Lacks](https://www.amazon.com/Immortal-Life-Henrietta-Lacks-ebook/dp/B00338QENI)! 
+
+Like HeLa cells, each of the cell lines in CCLE was obtained from real patients, isolated from tumor biopsies, and immortalized for research use. Each of  has a story to tell about how cancer arose, how it grew, and hopefully, how we can stop it from growing.
+
+The first thing we want to do is find the file that contains the meta-data we want for the Cancer Cell Line Encyclopedia. I have placed that file for you in your working directory (`Cell_lines_annotations_20181226.txt`) that contains the data we want to look at. To start, let's load this file and see what kind of data we're working with.
+
+```{r, echo = T, results= F}
+CCLE_metadata <- read.delim("Cell_lines_annotations_20181226.txt") # use the read.delim function to read in the file
+
+nrow(CCLE_metadata) # how many rows does our data have?
+ncol(CCLE_metadata) # how many columns does our data have?
+
+CCLE_metadata[1:5,1:10] # what does our data actually look like? 
+# Here, I'm getting the first 5 rows (1:5), and the first 10 columns (1:10), just to see - try increasing the number of rows/columns, or changing the range (5:10 or 10:20)! What happens when you pick a number that's out of range?
+```
+
+```{r, echo = F}
+knitr::kable(CCLE_metadata[1:5,1:10]) 
+# side note - don't worry right now about this weird looking function knitr::kable,
+# it just helps make the tables in this RMarkdown document print in a nice way.
+```
+
+So according to this file, there are 1,461 rows! Each row should correspond to a cell line, and we can see that the first 3 columns show 3 different naming or ID conventions for each cell line. The first is the CCLE ID, which just takes the name of the cell line and stitches it to the type of tissue it came from. For example, A549_LUNG is a lung cancer cell line that is conventionally called A549. 
+
+For convenience, the `type` is also present in it's own column, and may have additional details in the `type_refined` column.
+
+(P.S., you can also find HELA_CERVIX, and the data associated with the HeLa cancer cell line)
+
+When we want to communicate our findings to the broader public, we want to use the conventional names like "A549" and "HELA", instead of "A549_LUNG" or "HELA_CERVIX". We can use looping, either by creating a `for` loop, or by using the `-apply` functions on the CCLE ID column to isolate the name we want to use.
+
+Let's try first with a `for` loop:
+```{r}
+common_names <- character() # create a new empty vector to store the new names in
+for(id in CCLE_metadata$CCLE_ID){
+  split_id <- strsplit(x = id, split = "_") # This is the strsplit function, which splits strings by a specific pattern. For more info, type ?strsplit.
+  
+  # Note that strsplit returns a list of length 1, containing a vector of the string split by whatever pattern was specified by "split = ". 
+  # To access the common cell line name (which is the 1st word), we need to take the first element of the list (which is only 1 element long), and then take the first element of the vector inside that list.
+  common_names[id] <- split_id[[1]][1] # save that element as the "id"th element of common_names.
+}
+
+common_names[1:5] # Check to see if these look correct
+```
+
+***HOT TIP:*** 
+Remember that we loaded the CCLE metadata as a data frame. This means we can access a column of the data frame using the `$` operator - so for accessing the `type` column, I wrote `CCLE_metadata$type`. We can also access columns using the `[]`, so I could have also written `CCLE_metadata[,"type"]`. I could also access a specific column number, by writing `CCLE_metadata[,5]`.
+
+That seemed to work - now we have a vector of the common names to use when we talk to bench biologists! Okay, now let's try again, this time with the -apply functions.
+
+```{r}
+# Using the apply function, we can isolate each row or column at a time and apply a function to its contents. 
+# Note that MARGIN = 1 means we're looping over rows - if we set MARGIN = 2, we could loop over columns instead.
+# We also define a function to apply over the contents of each row, which I put into a variable I named "row_x".
+common_ids_lapply <- apply(X = CCLE_metadata, MARGIN = 1, FUN = function(row_x){
+  id <- row_x["CCLE_ID"] # Get the CCLE_ID of row_x
+  split_id <- strsplit(id, split = "_") # Use the same strsplit function as above.
+  return(split_id[[1]][1]) # Return the first element of the first element (see above).
+})
+
+# Let's try again using the sapply function, which loops over a vector. To this, we need to give just the vector of the CCLE_ID column, treating each element as "id", like I did in the for loop.
+
+common_ids_sapply <- sapply(X = CCLE_metadata$CCLE_ID, USE.NAMES = F, FUN = function(id){
+  split_id <- strsplit(id, split = "_") # Use the same strsplit function as above.
+  return(split_id[[1]][1]) # Return the first element of the first element (see above).
+}) 
+# Side note: I set "USE.NAMES" to FALSE to compare to "apply" which does not use names, but we could set "USE.NAMES" to TRUE to get the same kind of output we got with the for loop - try it, and check for equality between the sapply output and the for loop output, the same way I do with the lapply output and sapply out below.
+
+all.equal(common_ids_lapply, common_ids_sapply)
+```
+
+
+
+
+There's a lot of other very interesting data here. Let's take a look at some of the column names to get a sense of what else we can find out about these cell lines.
+
+```{r, echo = T, eval = F}
+colnames(x = CCLE_metadata)
+```
+
+```{r, echo = F}
+knitr::kable(colnames(CCLE_metadata), col.names = c("Column names of CCLE metadata"))
+```
+
+As background, the `Pathology` (and `site_subtype`s) and `Histology` (and `Hist_subtype`s) are annotations provided by the pathologist after they took the patient's tumor out. We also have information about each patient, including: 
+
+- `Gender`
+- `Age`
+- `Race`
+- `Geo_Loc` (where was the patient sample obtained?)
+- `inferred_ethnicity` (based on genetic analysis of the cell line)
+
+There's also information about how the cells were grown in the lab. This includes:
+
+- `Original.Source.of.Cell.Line` (where did the CCLE get their stock of cell line from?)
+- `Characteristics` (is it an adherent cell line that sticks to the plate, or does it grow suspended in fluid like a blood cell?)
+- `Growth.Medium` (what media does the cell grow in?)
+- `Supplements` (what additional nutrients does the cell need to grow?)
+- `Freezing.Medium` (what media was the cell stored in?)
+- `Doubling.Time.From.Vendor` (according to the source, how long does it take for the cells to replicate?)
+- `Doubling.Time.Calculated.Hours` (how many hours did the cells actually take to double?)
+
+
+
+### Diving into the metadata
+Now that we have a pretty good understanding of what kinds of data we have, let's take a look at the data itself.
+
+The first thing we should do is understand how some of the values look. `R` has some useful functions for summarizing data, some of which I'm going to demonstrate here:
+
+The `table` function gives us a frequency table for a categorical variable (how many times does each value occur in the data?) 
+
+```{r, eval = F}
+# First, let's look at the different tissue/tumor types we're working with.
+table(CCLE_metadata$type)
+```
+```{r, eval = T, echo = F}
+# NOTE: you should run the above code chunk on your machine. I'm using the below line again to make it look pretty in this document.
+knitr::kable(table(CCLE_metadata$type), col.names = c("type", "freq"))
+```
+
+We can also use the `table` function to compare two variables - so if I wanted to look at both gender and ethnicity, I could do the following:
+
+```{r, echo = T, eval = F}
+table(CCLE_metadata$Gender, CCLE_metadata$inferred_ethnicity)
+```
+```{r, echo = F}
+knitr::kable(table(CCLE_metadata$Gender, CCLE_metadata$inferred_ethnicity))
+```
+
+Note that there are blank values in `Gender` (which is why there's an extra row).
+We'll definitely talk more about this on Friday, but for now, I hope you see how useful the `table` function can be!
+
+Another useful function is `summary`, which can give us important summary statistics about numeric variables. One interesting numerical variable here is mutation rate (or `mutRate`). See below for the output of `summary`
+```{r}
+summary(object = CCLE_metadata$mutRate)
+```
+
+This means that, on average, the mutation rate for each cell line is 192.92. Don't worry about exactly what that means just yet, we'll cover it on Friday!
+
+One important thing to see is the number of `NA` values. These are values that are missing from the data, and are handled specifically by `R` as missing values. When we calculate the mean and median by themselves in R, we need to make sure we omit NA values - otherwise, it's like multiplying by 0, all the other numbers end up becoming NA also. To see what I *mean*, let's try just taking the mean without omitting NA, using the `mean` function.
+
+```{r}
+mean(CCLE_metadata$mutRate) # welp, that didn't work - should you take the mean without removing NA? nah.
+```
+```{r}
+mean(CCLE_metadata$mutRate, na.rm = T) # na.rm means "remove NAs for this calculation" - much better!
+```
+ We can also use other summary statistics - for example, `sd` gives standard deviation, `var` gives variance, and there are others that we'll learn later on. 
+ 
+***HOT TIP:*** 
+If you don't already know, you can pull up the help page for any function by putting `?` before the function and running it. For example, `?mean` pulls up the help page for the mean function. You can read here what other arguments to functions are (like `na.rm`) and what their default values are (`na.rm` by default is `FALSE`, so NA values are NOT removed when you run `mean` by itself).
+
+### Narrowing down to one type of cancer
+Just as an example, let's say we wanted to learn more about breast cancer. We would need to take a subset of the data. So let's do that here:
+
+```{r}
+is_breast_cell <- CCLE_metadata$type == "breast" # if the type is breast, give me TRUE. otherwise, give me FALSE.
+which_is_breast_cell <- which(is_breast_cell) # "which" is a function that gives the index of each TRUE.
+
+which_is_breast_cell
+```
+
+If that wasn't clear, what we want to do is only identify which cell lines have a `type` that is exactly "breast", so we use the `==` boolean equality comparison to check if each value in the `type` column is "breast" or not. If it is, we get a TRUE, and if it's not, we get a FALSE. That gives us a single logical vector containing TRUEs and FALSEs for each value in `type`. 
+
+Then, we use `which` to give us the index (or position) of each TRUE. From this, we know that the 12th value is a TRUE, which means that row 12 in `CCLE_metadata` data frame is a breast cancer cell line. We can check that here:
+
+```{r, eval = F}
+CCLE_metadata[12,] # give us the 12th row
+```
+```{r, eval = T, echo = F}
+knitr::kable(CCLE_metadata[12,])
+```
+
+Yep! The 12th cell line is `HCC2157_BREAST`, which is indeed a breast cancer cell line.
+
+Okay, so now that we have all of the indices (plural of index, not indexes!) of the breast cell lines, I'm curious - which breast cancer cell line has the highest mutation rate?
+
+```{r}
+CCLE_metadata_breast <- CCLE_metadata[which_is_breast_cell,] # make a new subsetted dataframe that only contains breast cancer cell lines
+
+max(CCLE_metadata_breast$mutRate, na.rm = T) # The highest mutation rate - don't forget to remove NAs!
+
+which_breast_highest_mutRate <- which.max(CCLE_metadata_breast$mutRate) # Get the index using the which.max function
+
+CCLE_metadata_breast$CCLE_ID[which_breast_highest_mutRate] # Get the cell line ID with the highest mutation rate. Food for thought: How can you confirm this is in fact the cell line with the highest mutation rate?
+```
+
+
+## QUESTIONS
+Create a new R chunk or click the "Insert -> R" near the top right of the script-writing panel, and write code to solve the following questions.
+
+
+1. Now that we know how many cell lines and columns there are, can you calculate the number of data points in the metadata file?
+
+**Hint:** Remember that R is a calculator!
+
+
+2. A software was used to infer the ethnicity of the cell line from genomic data. Which ethnicities are most/least represented in CCLE? Compare that to the reported race of the patient. Can you think about what the consequences of this might be? What about the software that is used to infer ethnicity?
+
+**Hint:** Use the `table` function to answer this question.
+
+
+3. Cancer is often thought of as a disease of aging, but in truth, it affects people of all ages. What are some of the summary statistics about the ages of the patients from whom the CCLE was derived? BONUS: Can you identify which cancers predominantly affect people under age 18?
+
+**Hint:** Use the `summary` function to answer this question.
+
+
+4. Growing cells in a dish requires that you understand how frequently the cell population doubles. Cells that fully occupy the space of the plate need to be "passaged", or transferred from one plate to another to allow the cells more room to grow. The "doubling time" has been recorded for all CCLE cell lines, and we can use it as a proxy for how fast the tumor might have been growing in the patient. What is the average doubling time (use calculated hours) for colorectal cancer cell lines? Which cell line has the fastest doubling time?
+
+**Hint:** You'll need to subset for colorectal cancer cell lines.
+
+5. Create a plot showing the relationship between doubling time and mutation rate. Extra credit for anyone who can use the `ggplot2` package (load using `library(ggplot2)`) to create their plot, and/or who can color their plot by cancer type. BONUS: Are these variables correlated?
+
+
+**Hint:** The base `plot` function works by taking in data for the x-axis and y-axis as follows:
+```{r}
+x_data <- c(1.3, 2.6, 6.3, 8.5, 1.1)
+y_data <- c(3.3, 5.2, 0.1, 3.3, 5.9)
+
+plot(x_data, y_data)
+```
+
+Extra hint: The `qplot` function of ggplot2 also works similarly!
+
+BONUS hint: To learn more about the correlation function in `R`, try typing `?cor` to read the help page.
