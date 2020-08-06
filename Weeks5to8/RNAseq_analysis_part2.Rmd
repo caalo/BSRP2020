@@ -1,0 +1,217 @@
+---
+title: "RNAseq Analysis Part 2"
+author: "Sidharth Jain"
+date: "7/7/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# This function checks for installation of a package.
+# You can use this to see if a package is installed, and install it if needed.
+check_installation <- function(package, install = TRUE){
+  if(!require(package, character.only = T)){
+    if(install){
+      if(check_installation("BiocManager", install = F)){
+        BiocManager::install(package, ask = F)
+      }else{
+        install.packages(package, ask = F)
+      }
+      if(require(package, character.only = T))
+        return(T)
+    }
+    return(F)
+  }else{
+    return(T)
+  }
+}
+
+check_installation("BiocManager")
+check_installation("DESeq2")
+check_installation("reactome.db")
+check_installation("tidyverse")
+```
+## Introduction
+
+In this vignette, we're going to be looking at differential expression analysis. Here, we'll focus on three different approaches to DE analysis:
+
+- A binary independent variable (KRAS mutated or wildtype)
+- *Independent variable with multiple categories (lineage)*
+- A continuous independent variable (KRAS expression)
+
+For your projects, you'll want to identify your independent variable, and use the counts matrix I provide here to perform differential expression analysis. This counts matrix is formatted such that the rows represent each gene, and columns represent each cell line (***which is different from the other data we have worked with***). I also changed the column names to the CCLE format instead of the DepMap ID.
+
+```{r}
+CCLE_metadata <- read_csv("sample_info.csv")
+
+# Downloaded CCLE_RNAseq reads from CCLE portal
+# and processed in create_CCLE_count_data.R (SJ)
+# where RNA read counts were rounded to allow for use in DESeq2
+
+# NOte the use of the readRDS function to read in an R data-set.
+CCLE_counts <- readRDS("CCLE_RNAseq_counts.rds")
+
+# BE AWARE! Genes are on rows, samples are on columns
+dim(CCLE_counts)
+head(rownames(CCLE_counts))
+head(colnames(CCLE_counts))
+```
+
+
+## Comparing 3 lineages (prostate, kidney, urinary tract)
+
+For this comparison, we will be filtering by sample, and using the lineage as an independent variable by which we will be making comparisons. I will be using 3 lineages here.
+
+```{r}
+# First filter for only cell lines with RNAseq counts data
+# Then filter for specific lineages of interest
+CCLE_metadata_lineage <- CCLE_metadata %>%
+  filter(CCLE_Name %in% colnames(CCLE_counts)) %>%
+  filter(lineage %in% c("prostate", "kidney", "urinary_tract"))
+
+# Filter the counts to only those cell lines that match the above lineages
+CCLE_counts_lineage <- CCLE_counts[,colnames(CCLE_counts) %in% CCLE_metadata_lineage$CCLE_Name]
+
+# Re-order the metadata to match the column order in the counts data
+CCLE_metadata_lineage <- CCLE_metadata_lineage[match(CCLE_metadata_lineage$CCLE_Name, colnames(CCLE_counts_lineage)),]
+```
+
+Now we can create a DESeq Dataset object, and run DESeq2.
+
+```{r}
+DDS <- DESeqDataSetFromMatrix(
+  countData = CCLE_counts_lineage,
+  colData = CCLE_metadata_lineage,
+  design = ~lineage
+)
+
+DDS.run <- DESeq(DDS)
+```
+Because we did more than 2 comparisons (prostate, kidney, and urinary tract), we need to specify which comparison's results we want to assess in the results.
+
+We can see which comparisons have been done by running `resultsNames`
+```{r}
+resultsNames(DDS.run)
+```
+
+So we see a `lineage_prostate_vs_kidney` and a `lineage_urinary_tract_vs_kidney.` But why don't we see a `lineage_prostate_vs_urinary_tract`? That's because that was the default comparison that DESeq2 ran, and that comparison was used as the "Intercept".
+
+We can specify which comparison we want to view by using the `contrast` argument of the `results()` function. This is a vector of 3 elements: the first element is the name of the column in `colData` that is used for the design, and the 2nd and 3rd elements are the comparison to show in the results dataframe. Here, I use the contrast argument to look at the prostate vs urinary tract comparison.
+
+```{r}
+res_urinary_vs_prostate <- results(DDS.run, contrast = c("lineage", "urinary_tract", "prostate"))
+res_urinary_vs_prostate.df <- as.data.frame(res_urinary_vs_prostate)
+head(res_urinary_vs_prostate.df[order(res_urinary_vs_prostate.df$padj, decreasing = F),])
+```
+
+One interesting thing to note: we see that `PRAC1`, a gene associated with *prostate*-cancer susceptibility, is differentially expressed in these comparisons - which makes sense!
+
+# Heatmaps
+Another useful visualization tool might be a heatmap. There are several packages designed to create heatmaps in R, but we'll be using `heatmaply`, which produces interactive plots using plotly. I'll also show a more popular heatmap package, called `pheatmap`.
+
+The heatmap we're making here will show the top 10 most significant upregulated genes from each comparison. We'll need to use normalized values, so we'll be using processing the counts and log-transforming them to visualize everything in a heatmap. For more information on how DESeq2 normalizes the counts data, check out this link here: (HBC Training - DESeq2 normalization)[https://hbctraining.github.io/DGE_workshop/lessons/02_DGE_count_normalization.html]
+
+```{r}
+# Perform some initial counts normalization, using the dispersion estimates of DESEq2
+DDS.norm <- estimateSizeFactors(DDS.run) # this creates normalization factors.
+counts_norm <- counts(DDS.norm, normalized = T) # extract the normalized counts
+counts_norm_log <- log2(counts_norm+1) # add a pseudo-count of 1 and take the log2
+
+# Now identify the top 10 significant genes from each pairwise comparison
+top10_kidney_urinarytract <- DDS.run %>%
+  # Select the comparison
+  results(contrast = c("lineage", "kidney", "urinary_tract")) %>%
+  # Convert to df and tidy
+  as.data.frame() %>%
+  rownames_to_column(var = "Gene") %>%
+  # Identify the top most significant hits
+  filter(abs(log2FoldChange) > 0) %>% 
+  # Sort the entire dataframe by p-value (lowest to highest)
+  arrange(padj) %>%
+  # Get the top 10 rows
+  slice(1:10) %>%
+  # Pull only the gene column
+  pull(Gene)
+
+# Repeat for other comparisons:
+top10_kidney_prostate <- DDS.run %>%
+  results(contrast = c("lineage", "kidney", "prostate")) %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Gene") %>%
+  filter(abs(log2FoldChange) > 0) %>%
+  arrange(padj) %>%
+  slice(1:10) %>%
+  pull(Gene)
+
+top10_urinarytract_prostate <- DDS.run %>%
+  results(contrast = c("lineage", "urinary_tract", "prostate")) %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Gene") %>%
+  filter(abs(log2FoldChange) > 0) %>%
+  arrange(padj) %>%
+  slice(1:10) %>%
+  pull(Gene)
+
+# Combine the top hits into a single vector
+top10_genes <- c(top10_kidney_urinarytract, top10_kidney_prostate, top10_urinarytract_prostate)
+
+# Remove any duplicate top hits
+top10_genes <- unique(top10_genes)
+
+# Now subset these genes from the log-transformed normalized counts
+mat <- counts_norm_log[top10_genes,] # select the rows of each gene by name
+
+# Look at your data quickly in an easy base-R heatmap:
+image(mat) # not super useful... what are these axes???
+
+# Let's use the heatmaply package:
+check_installation("heatmaply")
+
+heatmaply(mat) 
+
+# Add colors to the top clustering dendrogram to indicate lineage
+clust_lineages <- data.frame(lineage = CCLE_metadata$lineage[match(colnames(mat), CCLE_metadata$CCLE_Name)])
+
+heatmaply(mat, col_side_colors = clust_lineages, plot_method = "plotly")
+```
+
+Heatmaply is a useful package for heatmap creation because the heatmaps are JavaScript-powered, and interactive! So you can use your mouse to zoom in, subset, and hover over each point to show important information. You can also save the image by clicking on the camera on the top right, which downloads the plot as a static png image. 
+
+On the sides and top, you may have noticed the dendrogram, or "tree-like" grouping for the genes and samples. This is a result of clustering the samples, using hierarchical clustering. To learn more about clustering, check out [this video](https://www.youtube.com/watch?v=EUQY3hL38cw).
+
+We'll be using the `hclust` function to perform hierarchical clustering here. By default, we will use euclidean distance with complete linkage clustering. These can be changed as seen in the ?hclust and ?dist pages.
+
+```{r}
+# Calculate distances between each GENE's expression pattern here using the dist function (because genes are on rows)
+mat_dist <- dist(mat, method = "euclidean")
+
+# Cluster based on the distance matrix
+gene_clust <- hclust(mat_dist, method = 'complete')
+
+plot(gene_clust)
+```
+```{r}
+# Calculate distances between each SAMPLE's expression pattern here using the dist function (transpose because samples are on columns)
+mat_dist <- dist(t(mat), method = 'euclidean')
+
+# Cluster based on the distance matrix
+sample_clust <- hclust(mat_dist, method = 'complete')
+
+# Plot, using lineage as the label - extract lineage by matching with metadata
+clust_lineages <- CCLE_metadata$lineage[match(colnames(mat), CCLE_metadata$CCLE_Name)]
+# Note: cex changes the font size of the labels
+plot(sample_clust, labels = clust_lineages, cex = 0.5)
+```
+
+### Conclusions to part 2
+
+In this guide, we went over:
+
+- Looking at multiple group comparisons using DESeq2
+- Identifying top hits from each comparison
+- Visualizing differentially expressed genes in a heatmap
+- Hierarchical clustering, and cladogram visualization.
+
+In part 3, we will go over using DESeq2 with a numerical independent variable,  principal component analysis (PCA)
+

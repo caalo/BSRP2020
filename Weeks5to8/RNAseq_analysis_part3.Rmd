@@ -1,0 +1,151 @@
+---
+title: "RNAseq Analysis Part 2"
+author: "Sidharth Jain"
+date: "7/7/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# This function checks for installation of a package.
+# You can use this to see if a package is installed, and install it if needed.
+check_installation <- function(package, install = TRUE){
+  if(!require(package, character.only = T)){
+    if(install){
+      if(check_installation("BiocManager", install = F)){
+        BiocManager::install(package, ask = F)
+      }else{
+        install.packages(package, ask = F)
+      }
+      if(require(package, character.only = T))
+        return(T)
+    }
+    return(F)
+  }else{
+    return(T)
+  }
+}
+
+check_installation("BiocManager")
+check_installation("DESeq2")
+check_installation("reactome.db")
+check_installation("tidyverse")
+```
+## Introduction
+
+In this vignette, we're going to be looking at differential expression analysis. Here, we'll focus on three different approaches to DE analysis:
+
+- A binary independent variable (KRAS mutated or wildtype)
+- Independent variable with multiple categories (lineage)
+- *A continuous independent variable (KRAS expression)*
+
+For your projects, you'll want to identify your independent variable, and use the counts matrix I provide here to perform differential expression analysis. This counts matrix is formatted such that the rows represent each gene, and columns represent each cell line (***which is different from the other data we have worked with***). I also changed the column names to the CCLE format instead of the DepMap ID.
+
+```{r}
+CCLE_metadata <- read_csv("sample_info.csv")
+CCLE_mutation <- read_csv("CCLE_mutations.csv")
+
+# Downloaded CCLE_RNAseq reads from CCLE portal
+# and processed in create_CCLE_count_data.R (SJ)
+# where RNA read counts were rounded to allow for use in DESeq2
+
+# NOte the use of the readRDS function to read in an R data-set.
+CCLE_counts <- readRDS("CCLE_RNAseq_counts.rds")
+
+# BE AWARE! Genes are on rows, samples are on columns
+dim(CCLE_counts)
+head(rownames(CCLE_counts))
+head(colnames(CCLE_counts))
+```
+
+## Using a continuous independent variable
+
+In this example, I will be using the expression of KRAS as an independent variable to find the genes that are most related to KRAS expression. One thing to note: doing this kind of differential expression analysis is very similar to correlation analysis. So you may want to consider using correlations to find the top most associated genes, and then compare to the most significant findings with DESeq.
+
+```{r}
+CCLE_combined_KRAS <- CCLE_counts["KRAS",] %>%
+  # Select only KRAS expression, put into dataframe (note dot (.) notation)
+  data.frame(KRAS_exp = .) %>%
+  rownames_to_column(var = "CCLE_Name") %>%
+  # Merge with the CCLE_metadata - be sure to specify which column to merge by!
+  merge(CCLE_metadata, by = "CCLE_Name", all.x = T)
+```
+
+Now we can set up the DESeq Dataset object.
+
+```{r}
+DDS <- DESeqDataSetFromMatrix(
+  countData = CCLE_counts,
+  colData = CCLE_combined_KRAS,
+  design = ~KRAS_exp
+)
+
+```
+
+NOTE: DESeq2 gives us the recommendation to "center and scale numeric variables" to improve the accuracy of the algorithm. We can easily do this by normalizing by the median count and log-transforming the data, as well as adding a pseudo-count of 1 (to prevent any Infinity values before taking log of 0)
+
+```{r}
+CCLE_combined_KRAS$KRAS_exp <- log2((CCLE_combined_KRAS$KRAS_exp/median(CCLE_combined_KRAS$KRAS_exp)+1))
+```
+
+Now let's create the DESeq Dataset again.
+
+```{r}
+DDS <- DESeqDataSetFromMatrix(
+  countData = CCLE_counts,
+  colData = CCLE_combined_KRAS,
+  design = ~KRAS_exp
+)
+
+```
+Looks good! Let's run DESeq2. Now because we are using a numeric independent variable, we need to specify which test we want DESeq2 to use.
+
+```{r, eval = F}
+DDS.run <- DESeq(DDS)
+saveRDS(DDS.run, file = "KRAS_continuous_DDSrun.rds")
+```
+
+
+```{r}
+DDS.run <- readRDS("KRAS_continuous_DDSrun.rds")
+# Extract results
+results.KRAS <- results(DDS.run)
+results.KRAS_df <- as.data.frame(KRAS_results) %>%
+  rownames_to_column("gene")
+
+View(KRAS_results.df)
+```
+
+## GO Term Enrichment
+
+GO term enrichment can help us make sense of the top differentially expressed genes by identifying any pathways or regulatory loops that may be enriched in our significantly differentially expressed genes.
+
+```{r}
+check_installation("goseq")
+
+# Define what genes are significant (up or down-regulated)
+results.KRAS_df$significant <- -log10(results.KRAS_df$pvalue) > 20
+
+signif_genes <- as.integer(results.KRAS_df$significant)
+# replace missing values with 0 (not significant)
+signif_genes[is.na(signif_genes)] <- 0
+
+names(signif_genes) <- results.KRAS_df$gene
+
+null_goseq <- goseq::nullp(signif_genes, genome = "hg19", id = "geneSymbol")
+results_goseq <- goseq(null_goseq, genome = "hg19", id = "geneSymbol")
+
+View(results_goseq)
+```
+
+## Principal component analysis
+
+
+
+
+
+
+
+
+

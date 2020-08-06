@@ -1,0 +1,137 @@
+---
+title: "RNAseq Analysis Part 1"
+author: "Sidharth Jain"
+date: "7/7/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# This function checks for installation of a package.
+# You can use this to see if a package is installed, and install it if needed.
+check_installation <- function(package, install = TRUE){
+  if(!require(package, character.only = T)){
+    if(install){
+      if(check_installation("BiocManager", install = F)){
+        BiocManager::install(package, ask = F)
+      }else{
+        install.packages(package, ask = F)
+      }
+      if(require(package, character.only = T))
+        return(T)
+    }
+    return(F)
+  }else{
+    return(T)
+  }
+}
+
+check_installation("BiocManager")
+check_installation("DESeq2")
+check_installation("reactome.db")
+check_installation("tidyverse")
+```
+## Introduction
+
+In this vignette, we're going to be looking at differential expression analysis. Here, we'll focus on three different approaches to DE analysis:
+
+- A binary independent variable (KRAS mutated or wildtype)
+- Independent variable with multiple categories (lineage)
+- A continuous independent variable (KRAS expression)
+
+For your projects, you'll want to identify your independent variable, and use the counts matrix I provide here to perform differential expression analysis. This counts matrix is formatted such that the rows represent each gene, and columns represent each cell line (***which is different from the other data we have worked with***). I also changed the column names to the CCLE format instead of the DepMap ID.
+
+```{r}
+CCLE_metadata <- read_csv("sample_info.csv")
+CCLE_mutation <- read_csv("CCLE_mutations.csv")
+
+# Downloaded CCLE_RNAseq reads from CCLE portal
+# and processed in create_CCLE_count_data.R (SJ)
+# where RNA read counts were rounded to allow for use in DESeq2
+
+# NOte the use of the readRDS function to read in an R data-set.
+CCLE_counts <- readRDS("CCLE_RNAseq_counts.rds")
+
+# BE AWARE! Genes are on rows, samples are on columns
+dim(CCLE_counts)
+head(rownames(CCLE_counts))
+head(colnames(CCLE_counts))
+```
+
+## KRAS mutant vs. wildtype
+
+For the first analysis, we'll be looking at KRAS wildtype vs mutant cells to identify all differentially expressed genes. To do this, we'll need to format our mutation data in such a way to add it as a column to the CCLE_mutation data.
+
+```{r}
+CCLE_combined_KRAS <- CCLE_mutation %>%
+  # Select only KRAS mutations
+  filter(Hugo_Symbol=="KRAS") %>%
+  # Merge with the CCLE_metadata - be sure to specify which column to merge by!
+  # Also, keep all even if there's no match - which will be true for KRASwt lines
+  merge(CCLE_metadata, by = "DepMap_ID", all = T) %>%
+  # Add a new logical column that indicates whether the line is KRAS mut or wt.
+  mutate(KRAS_mutant = !is.na(Protein_Change))
+
+# Next, filter the metadata to only those samples present on the columns of the count data.
+# We'll be using the `match` function here to make sure that the order is consistent.
+CCLE_combined_KRAS_filt <- CCLE_combined_KRAS[match(colnames(CCLE_counts), CCLE_combined_KRAS$CCLE_Name),]
+
+```
+
+Now we can create a DESeq2 object. Here, we load in the counts data, as well as the sample metadata (colData). We also specify which column in the metadata contains the comparison we wish to conduct in our differential analysis.
+
+```{r}
+# Create a new DESeq Dataset object from a counts matrix here:
+DDS <- DESeqDataSetFromMatrix(
+  countData = CCLE_counts,
+  colData = CCLE_combined_KRAS_filt,
+  design = ~KRAS_mutant
+)
+```
+
+Next, we can perform the differential analysis using the DESeq function. This is actually a composite of many functions, each performing a single task, but for ease of use, they have been combined in a single function.
+
+Note that this can take a while to run. I've included here a way to parallelize the function to make it run a little faster, but if you have any difficulty making this work on your own machine, just remove the `parallel` and `BPPARAM` parameters and run again. It took about 20 minutes to run on my machine, so you might want to consider taking a coffee break!
+
+```{r, eval = F}
+DDS.run <- DESeq(DDS, parallel = T, BPPARAM = BiocParallel::SnowParam())
+saveRDS(DDS.run, file = "DDS_run.rds") # save the results so we don't keep re-running
+```
+
+Now we extract the results from the DESeq object, and convert to dataframe to make it easier to visualize using ggplot.
+
+```{r}
+DDS.run <- readRDS("DDS_run.rds") # load the pre-run results
+results.KRAS <- results(DDS.run)
+results.KRAS_df <- as.data.frame(results.KRAS) %>%
+  rownames_to_column(var = "gene") %>%
+  filter(complete.cases(.))
+
+```
+
+### Downstream visualization and analysis
+
+Volcano plots are useful, as they allow quick and easily visualizations of all of our results. The x-axis of a volcano plot is the log2 of the fold change (or effect size), and the y-axis is the -log10 of the p-value (or FDR).
+
+```{r}
+ggplot(data = results.KRAS_df, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point()
+```
+
+You can set a specific FDR and fold-change cutoff to identify your most significant results. Here, I'm setting a -log10-FDR cutoff of 25 (or $$10^{-25}$$), and a fold-change threshold of >2.5 or <-2.5. This may differ from dataset to dataset depending on size and signal-to-noise of the data.
+
+```{r}
+results.KRAS_df <- results.KRAS_df %>%
+  mutate(significant = -log10(padj) > 50 & abs(log2FoldChange) > 2.5) %>%
+  mutate(custom_label = gene %in% c("KRAS", "EGFR", "TP53"))
+
+ggplot(data = results.KRAS_df, aes(x = log2FoldChange, y = -log10(padj), color = significant, label = gene)) +
+  geom_point() +
+  geom_label(data = subset(results.KRAS_df, results.KRAS_df$significant==TRUE)) +
+  geom_hline(yintercept =50) +
+  geom_vline(xintercept = c(2.5, -2.5))
+```
+
+
+
