@@ -1,0 +1,153 @@
+---
+title: "Week 4 Guide to t-testing and correlation"
+author: "Sidharth Jain"
+date: "6/28/2020"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+This guide is meant to explain when we use t-tests, and how this can be done practically in R.
+
+## T-test
+When we want to compare two different groups, one thing we often want to do is compare the means of those groups. For example, is a gene significantly more expressed in certain cells than in others? Once we identify the comparison we want to make, we can perform a t-test to determine HOW different the means of these groups are.
+
+When considering whether a t-test is appropriate, you should identify the variable being compared - is it numeric? Is the comparison based on a categorical or boolean group? If the answer to both of these questions is yes, then a t-test would be called for.
+
+Before we understand t-tests, we first need to understand what a statistic is. A sample mean is a sample *statistic*, and is usually represented with the variable $\bar{x}$.  We can determine $\bar{x}$ by taking a random sample from the population, and taking its mean. On the other hand, the population mean is a population *parameter*, and is represented by the variable $\mu$. Parameters are the TRUTH - they represent something than can never truly be known, but can be approximated. As the sample size gets larger and larger, $\bar{x}$ will approach $\mu$. 
+
+When we want to compare $\bar{x}$ to a null hypothesis that represents $\mu$, we can use a *one-sample t-test*. 
+
+> The one sample t-test compares the mean of a random sample from a normal population with the population mean proposed in a null hypothesis.
+
+When we perform a t-test, we calculate a t-statistic. This essentially represents a standardized way of representing the distance of the sample statistic from a null hypothesis (for the one-sample t-test). 
+
+$$ t = \frac{\bar{x} - \mu}{\sigma_\bar{x}/\sqrt{n}} $$
+
+Note that $\sigma_\bar{x}$ represents the standard deviation of the sample x. $n$ represents the sample size (or number of elements in $\bar{x}$). 
+
+In R, we can run a one-sample t-test by giving the sample values as one argument to the t-test function, and the population mean (or our null hypothesis approximation of the population mean). Below, I'm using the iris dataset to compare the sepal length to our approximation for the true mean, which for this test, I assumed was $6$. 
+
+```{r}
+null_mean = 6
+t.test(x = iris$Sepal.Length, mu = null_mean, alternative = "two.sided")
+```
+
+How can we interpret these results? The first thing to note is the t-statistic. In this case, $t = -2.3172$. That is computed in the same way as seen in the formula above. The next value is $df = 149$. This represents *degrees of freedom*, which is calculated by taking the sample size $n$ and subtracting the number of statistics being used. In this case, we are using $\bar{x}$, so we subtract 1 from the length of $\bar{x}$. The p-value represents the probability of obtaining a result as extreme or more extreme than the observed t-statistic given the null hypothesis. To truly understand this, we can visualize a simulated t-distribution using the 
+
+```{r}
+random_t <- rt(n = 10000, df = 149)
+df <- data.frame(
+  random_t,
+  one_sided = random_t <= -2.3172,
+  two_sided = random_t <= -2.3172 | random_t >= 2.3172
+)
+
+ggplot(data = df, aes(x = random_t, fill = two_sided)) +
+  geom_histogram(bins = 100)
+```
+
+This plot shows the area under the curve of the t-distribution for all points as extreme or more extreme than the t-statistic computed earlier. If we take the whole area under this curve to be 1, the fraction of the area that is blue represents the p-value.
+
+This plot demonstrates a 2-sided test. In this case, we are testing if the observed values are as extreme or more extreme on either side. If we only wanted to see if the values were less than (or greater than) the population parameter $\mu$, we could re-run the t-test in R.
+
+```{r}
+null_mean = 6
+t.test(x = iris$Sepal.Length, mu = null_mean, alternative = "less")
+```
+Note that the t-statistic remains the same, but the p-value is halved. That's because we're only looking at the area under the lower portion of the curve. We can visualize this again using our simulated t-distribution.
+
+```{r}
+ggplot(data = df, aes(x = random_t, fill = one_sided)) +
+  geom_histogram(bins = 100)
+```
+
+The main assumption made to use a one-sample t-test is that the sample is obtained random from a population that is normally distributed.
+
+But what if you don't want to compare a single sample to a population mean? What if you wanted to compare two different samples to see if they were significantly different? We can do this using the *two-sample t-test*.
+
+> The two-sample t-test is a method to compare the means of two different samples. For unpaired tests, the samples are assumed to be independent of one another.
+
+Two-sample t-tests come in two flavors - paired or unpaired. Paired t-tests compare two variables or measures coming from each subject. For example, if we compare expression of a gene in a cell line that has been treated with drug compared to no drug. An example of that is seen below.
+
+```{r, echo = F}
+CLX_expression_noDrug <- rnorm(n = 30, mean = 2, sd = 1)
+CLX_expression_withDrug <- jitter(CLX_expression_noDrug, amount = 0.6)+0.3
+```
+
+```{r}
+CLX_data <- data.frame(
+  DMSO_mock = CLX_expression_noDrug,
+  Dose1.0 = CLX_expression_withDrug
+)
+
+t.test(CLX_data$DMSO_mock, CLX_data$Dose1.0, paired = T)
+```
+An interesting property of a paired 2-sample t-test is that it is analogous to performing a 1-sample t-test on the differences between the paired samples with a null hypothesis of 0 (no difference between the samples). The p-values and calculated t-statistics are identical. See below for proof:
+
+```{r}
+# Paired t-test
+t.test(CLX_data$DMSO_mock, CLX_data$Dose1.0, paired = T)
+
+# 1-sample t-test of the differences
+t.test(CLX_data$DMSO_mock - CLX_data$Dose1.0, mu = 0)
+```
+
+Compare this to an unpaired t-test. The key difference in assumptions is that an unpaired t-test uses a pooled sample variance. We won't go into the gory details here, but the primary area of focus will be knowing when to use a paired vs unpaired t-test. For the CCLE, when we compare different groups of cell lines' expression for a single gene, we will be using unpaired t-tests. On the other hand, if we compared expression of the same cell lines before and after treatment with a drug or CRISPR knockout, we would use a paired t-test.
+
+In previous code, we compared two numeric vectors, passing each vector as an argument to the `t.test` function. However, with tidy data, we can also use the `~formula` notation of R to specify which column contains our numeric data and which contains the groupings.
+
+For example, see the following comparison between the setosa and versicolor flowers from the iris dataset. This is an *unpaired 2-sample t-test*.
+```{r}
+iris_filt <- iris %>%
+  filter(Species %in% c("setosa", "versicolor"))
+
+# Here we use the formula notation. 
+# Read Sepal.Width ~ Species as: "Comparing sepal width by species"
+t.test(Sepal.Width ~ Species, data = iris_filt)
+```
+
+In this case, we use the Species to separate our data into two groups, and compare the Sepal.Width variable between both  groups. Any case where we are comparing two samples directly to each other calls for an unpaired two-sample t-test.
+
+### Exercises
+
+
+1. Using the mtcars data, test the difference in miles per gallon (mpg) between cars with 3 gears and cars with 4 gears. Which has a higher mpg? Interpret the results and produce a plot that visualizes your findings.
+
+
+
+
+
+
+2. Given a t-statistic, we may want to find out what the corresponding p-value is. Mathematically, we would calculate the area under the curve to the extremes of our given t-statistic (see the above red+blue histograms). When using R, we can determine these using the `pt` and `qt` functions. `pt` takes in a t-statistic (as the argument `q`) and identifies the corresponding p-value. `qt` takes in a p-value and returns the corresponding t-statistic.
+
+See the examples below:
+```{r}
+qt(p = 0.05, df = 30) # what is the t-statistic for p=0.05?
+pt(q = -2, df = 30) # what is the p-value for t=-2?
+```
+
+Using 30 degrees of freedom, determine the t-statistic for the following p-values:
+
+- $p=0.1$
+- $p=0.001$
+- $p=0.5$
+- $p=1$
+
+Repeat for the following t-statistics:
+
+- $t=0$
+- $t=-30$
+- $t=100$
+- $t=$NA
+
+
+
+
+
